@@ -5,121 +5,81 @@ import pandas as pd
 import rdflib
 import re
 import locale
+from rapidfuzz import fuzz
 _ = locale.setlocale(locale.LC_ALL, '')
 import numpy as np
 from sklearn.metrics import pairwise_distances
 import csv
-import operator
 
-def run_qdec(question, graph):
+def factual_emb(question, graph):
+    movie = pd.read_csv("D:\\atai_conv_agent\\subjects.csv")
 
-    header = '''
-                PREFIX ddis: <http://ddis.ch/atai/>
-                PREFIX wd: <http://www.wikidata.org/entity/>
-                PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-                PREFIX schema: <http://schema.org/>
-            '''
+    relations = pd.read_csv("D:\\atai_conv_agent\\predicates.csv")
 
-    WD = Namespace('http://www.wikidata.org/entity/')
-    WDT = Namespace('http://www.wikidata.org/prop/direct/')
-    SCHEMA = Namespace('http://schema.org/')
-    DDIS = Namespace('http://ddis.ch/atai/')
+    def get_ent_rel(question):
+        temp_sub = []
+        for i in movie.iloc[ : , 1].values:
 
-    '''
-    graph = rdflib.Graph()
-    graph.parse('/Users/sanjanawarambhey/Downloads/14_graph.nt', format = 'turtle')
-    '''
-    df_movies = pd.read_csv("D:\\atai_conv_agent\\movie_title_rating.csv")
-    movies = np.unique(df_movies.title.values.tolist())
+            if i.lower() in question.lower():
+                temp_sub.append(i)
 
-    entity_emb = np.load('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\entity_embeds.npy')
-    relation_emb = np.load('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\relation_embeds.npy')
+        entities_sub = max(temp_sub, key = len)
 
-    with open('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\entity_ids.del', 'r') as ifile:
-        ent2id = {rdflib.term.URIRef(ent): int(idx) for idx, ent in csv.reader(ifile, delimiter='\t')}
-        id2ent = {v: k for k, v in ent2id.items()}
-    with open('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\relation_ids.del', 'r') as ifile:
-        rel2id = {rdflib.term.URIRef(rel): int(idx) for idx, rel in csv.reader(ifile, delimiter='\t')}
-        id2rel = {v: k for k, v in rel2id.items()}
+        # for token in doc:
+        #     print(token.text, token.dep_, token.pos_)
 
-    def get_entity_relation(ques):
-        temp = []
-        for i in movies:
+        if "cast" in question.lower() or "cast member" in question.lower() or "casted" in question.lower():
+            entities_rel = "cast member"
 
-            if i.lower() in ques.lower():
-                temp.append(i)
+        elif "publication" in question.lower():
+                entities_rel = "publication date"
 
-        entities = max(temp, key = len)
+        else:
+            doc = nlp(question)
+            temp_rel = []
+            temp_rel_scores = []
 
+            try:
+                for i in relations.iloc[ : , 1].values:
 
-        q_p = [("what is the (.*) of ENTITY?"), ("who is the (.*) of ENTITY?"), ("what was ENTITY (.*) for ?"),("who was the (.*) in ENTITY?"), ("who were (.*) in ENTITY?"), ("who was the (.*) of ENTITY?"), ("what (.*) did the ENTITY recieve?"),("what (.*) did the ENTITY get?")]
-        print("question pattern: {}\n".format(q_p))
-        for i in q_p:
+                    if i.lower() in question.lower() and i.lower() not in entities_sub:
+                        temp_rel.append(i)
 
-            ques = re.sub(entities, "ENTITY", ques.rstrip("?"))  
-            if re.match(i.lower(), ques.lower()) != None:
-                rel = re.match(i.lower(), ques.lower()).group(1)
-                print("recognized relation: {}\n".format(rel))
+                entities_rel = max(temp_rel, key = len)
+                
+            except:
+                # print("START")
+                pos = []
 
-        return(entities, rel)
+                for token in doc:
+                    pos.append(token.pos_)
 
+                if "NOUN" in pos:
+                    # print("VERB")
+                    for token in doc:
+                        if token.pos_ == "NOUN" and token.text not in entities_sub:
+                            for rel in relations.iloc[ : , 1].values:
+                                temp_rel_scores.append(fuzz.ratio(token.text, rel))
 
+                elif "VERB" in pos:
+                    # print("NOUN")
+                    for token in doc:
+                        if token.pos_ == "VERB" and token.text not in entities_sub:
+                            # print(token.text)
+                            for rel in relations.iloc[ : , 1].values:
+                                temp_rel_scores.append(fuzz.ratio(token.text, rel))
+                
+                max_idx = np.argmax(temp_rel_scores)
+                entities_rel = (relations.iloc[ : , 1].values)[max_idx]
 
-    def get_entity_node(x):
-        header = '''
-                PREFIX ddis: <http://ddis.ch/atai/>
-                PREFIX wd: <http://www.wikidata.org/entity/>
-                PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-                PREFIX schema: <http://schema.org/>
-            '''
-            
-        tuple_list = list(graph.query(header + '''
-            SELECT * WHERE {
-                ?movie rdfs:label "%s"@en .
-                ?movie wdt:P57/rdfs:label ?director .
-                OPTIONAL { ?movie ddis:rating ?rating } .
-                OPTIONAL { ?movie wdt:P577 ?value}
-        } '''%(x)))
+        return entities_sub, entities_rel
 
-        s = tuple_list[0][0]
+    ent, rel = get_ent_rel(question)
 
-        return s 
+    df_rel = relations.query('predicates == "%s"'%(rel))
+    rel_link = rdflib.term.URIRef(df_rel.iloc[ 0 , -1])
 
-    def get_relation_labels(code):
-        try:
-            code = re.sub("http://www.wikidata.org/prop/direct/", "", code)
-            header = '''
-                    PREFIX ddis: <http://ddis.ch/atai/>
-                    PREFIX wd: <http://www.wikidata.org/entity/>
-                    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-                    PREFIX schema: <http://schema.org/>
-                '''
-
-            tuple_list = list(graph.query(header + '''
-            SELECT  *
-            WHERE {
-                    wdt:%s rdfs:label ?label .
-                }
-            '''%(code)))
-            return tuple_list[0][0]
-
-        except:
-            pass
-
-    def levenshteinDistance(s1, s2):
-        if len(s1) > len(s2):
-            s1, s2 = s2, s1
-
-        distances = range(len(s1) + 1)
-        for i2, c2 in enumerate(s2):
-            distances_ = [i2+1]
-            for i1, c1 in enumerate(s1):
-                if c1 == c2:
-                    distances_.append(distances[i1])
-                else:
-                    distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
-            distances = distances_
-        return distances[-1]
+    df_mv = movie.query('subjects == "%s"'%(ent))
 
     def get_entity_labels(code):
         code = re.sub("http://www.wikidata.org/entity/", "", code)
@@ -140,65 +100,72 @@ def run_qdec(question, graph):
 
         return x
 
+    temp = []
 
-    def get_predicate_label(node, relation):
-        rel2lbl = {obj: str(pre) for pre, obj in graph.predicate_objects(node)}
-        df = pd.DataFrame()
-        df = pd.DataFrame(rel2lbl.items(), columns=['obj','pred'])
-        df['pred_labels'] = df['pred'].apply(get_relation_labels)
-        scores = {}
-        for m in df.iloc[:,-1].values:
+    try:
+        for i in df_mv.iloc[ : , -1].values:
             try:
-                scores[m] = 1 - levenshteinDistance(relation,m.toPython())
-            except:
-                scores[m] = -10000
-        result = max(scores.items(), key=operator.itemgetter(1))[0]
-        result_link = np.unique(df[df['pred_labels']==result]['pred'])
-        return(result, result_link[0])
+                obj_list = []
+                try:
+                    for triple in graph.triples((rdflib.term.URIRef(i), rel_link, None)):
+                        # print(triple)
+                        if type(triple[2]) == rdflib.term.Literal:
+                            x = triple[2]
+                        else:
+                            x = get_entity_labels(triple[2])
+                        obj_list.append(x)
+                        
+                    if len(obj_list) > 0:
+                        temp.append(" ".join(obj_list))
+                        # print(obj_list)
+                except:
+                    pass
 
-    entity, relation = get_entity_relation(question)
-    node = get_entity_node(entity)
+            except Exception as e:
+                print(str(e))
 
-    (lable, link) = get_predicate_label(node, relation)
+        temp = np.unique(temp)
 
-    pred_code = re.sub("http://www.wikidata.org/prop/direct/", "", link)
+        final_answer = "The answer for your question is " + " ".join(temp)
+        
+        if len(temp) == 0:
+            print(temp[1])
 
-    tuple_P = set(graph.query('''
-            PREFIX ddis: <http://ddis.ch/atai/>
-            PREFIX wd: <http://www.wikidata.org/entity/>
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX schema: <http://schema.org/>
+    except:
+        ent, rel = get_ent_rel(question)
 
-            SELECT ?obj ?lbl WHERE {
-                ?ent rdfs:label "%s"@en .
-                ?ent wdt:%s ?obj .
-                ?obj rdfs:label ?lbl .
-            }
-            '''%(entity,pred_code)))
+        df_rel = relations.query('predicates == "%s"'%(rel))
+        rel_link = rdflib.term.URIRef(df_rel.iloc[ 0 , -1])
 
-    answer = {ent[len(WD):]: str(lbl) for ent, lbl in (i for i in tuple_P)}
+        df_mv = movie.query('subjects == "%s"'%(ent))
 
-    if answer != {} and pred_code != 'P577':
-        final_answer = list(answer.values())
-        if len(final_answer)>1:
-            print("The answer to your question gathered knowledge graph is as follows: " + (' and '.join(final_answer)))
-        else:
-            print("The answer to your question gathered from the knowledge graph is " + (final_answer[0]))
-    elif pred_code == 'P577':
-        tuple_P = list(graph.query(header + '''
-            SELECT * WHERE {
-                ?movie rdfs:label "%s"@en .
-                ?movie wdt:P57/rdfs:label ?director .
-                OPTIONAL { ?movie ddis:rating ?rating } .
-                OPTIONAL { ?movie wdt:%s ?value}
-        }'''%(entity, 'P577')))
+        header = '''
+                    PREFIX ddis: <http://ddis.ch/atai/>
+                    PREFIX wd: <http://www.wikidata.org/entity/>
+                    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+                    PREFIX schema: <http://schema.org/>
+                '''
 
-        answer = np.array(tuple_P[0][3].toPython())
-        final_answer = answer
-        print("The date that you have asked as calculated from the knowledge graph is " + str(final_answer))
-    else: 
-        head = entity_emb[ent2id[node]]
-        pred = relation_emb[rel2id[DDIS.indirectSubclassOf]]
+        WD = Namespace('http://www.wikidata.org/entity/')
+        WDT = Namespace('http://www.wikidata.org/prop/direct/')
+        SCHEMA = Namespace('http://schema.org/')
+        DDIS = Namespace('http://ddis.ch/atai/')
+
+        # df_movies = pd.read_csv("D:\\atai_conv_agent\\movie_title_rating.csv")
+        # movies = np.unique(df_movies.title.values.tolist())
+
+        entity_emb = np.load('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\entity_embeds.npy')
+        relation_emb = np.load('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\relation_embeds.npy')
+
+        with open('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\entity_ids.del', 'r') as ifile:
+            ent2id = {rdflib.term.URIRef(ent): int(idx) for idx, ent in csv.reader(ifile, delimiter='\t')}
+            id2ent = {v: k for k, v in ent2id.items()}
+        with open('D:\\Downloads\\ddis-graph-embeddings\\ddis-graph-embeddings\\relation_ids.del', 'r') as ifile:
+            rel2id = {rdflib.term.URIRef(rel): int(idx) for idx, rel in csv.reader(ifile, delimiter='\t')}
+            id2rel = {v: k for k, v in rel2id.items()}
+
+        head = entity_emb[ent2id[rdflib.term.URIRef(df_mv.iloc[ 0 , -1])]]
+        pred = relation_emb[rel2id[rel_link]]
         lhs = head + pred
         dist = pairwise_distances(lhs.reshape(1, -1), entity_emb).reshape(-1)
 
@@ -211,6 +178,11 @@ def run_qdec(question, graph):
 
         df_emb['Label'] = df_emb['Label'].apply(get_entity_labels)
         answer = df_emb['Label'].values
-        final_answer = answer
+        final_answer = answer[0]
+        final_answer = "The answers that you have asked for have been calculated from the embedding of the graph, which is " + (final_answer)
 
-        print("The answers that you have asked for have been calculated from the embedding of the graph, which is " + (' and '.join(final_answer)))
+    print(final_answer)
+
+question = "Who were casted in Taxi Driver"
+
+print(factual_emb(question, graph))
