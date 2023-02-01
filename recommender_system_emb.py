@@ -6,6 +6,9 @@ import pandas as pd
 import re
 from sklearn.metrics import pairwise_distances
 
+graph = rdflib.Graph()
+graph.parse('D:\\Downloads\\ddis-movie-graph.nt\\14_graph.nt', format = 'turtle')
+
 def run_recm(question, graph):
     question_split = question.split(",")
 
@@ -80,14 +83,12 @@ def run_recm(question, graph):
 
     movie_code = re.sub("http://www.wikidata.org/entity/", "", tuple_list[0][0])
 
-    # which entities are similar to "Harry Potter and the Goblet of Fire"
     st = rdflib.term.URIRef(WD + movie_code)
 
     ent = ent2id[st]
     
-    # we compare the embedding of the query entity to all other entity embeddings
     dist = pairwise_distances(entity_emb[ent].reshape(1, -1), entity_emb).reshape(-1)
-    # order by plausibility
+    
     most_likely = dist.argsort()
 
     df_sugg = pd.DataFrame([
@@ -103,17 +104,9 @@ def run_recm(question, graph):
     answer = "The recommendations based on the movies you liked are- "
 
     for i in df_sugg.iloc[ 1: , 1].values:
-        answer = answer + "\n" + i
+        answer = answer + "\n" + i + ", "
 
-    ent = "The Godfather"
-    code = "P750"
+    print(answer)
 
-    tuple_list = list(graph.query(header + '''
-        SELECT * WHERE {
-            ?movie rdfs:label "%s"@en .
-            ?movie wdt:P57/rdfs:label ?director .
-            OPTIONAL { ?movie ddis:rating ?rating } .
-            OPTIONAL { ?movie wdt:%s ?value}
-    }'''%(ent, code)))
-
-    return answer
+question = "Recommend me some movies like Taxi Driver and Raging Bull"
+print(run_recm(question, graph))
