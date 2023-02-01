@@ -17,6 +17,6 @@ def run_driver(question, graph, data):
         response = run_recm(question, graph)
 
     else:
-        response = run_qdec(question, graph)
+        response = factual_emb(question, graph)
     
     return response
